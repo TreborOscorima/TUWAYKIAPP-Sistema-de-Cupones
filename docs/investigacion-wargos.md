@@ -1086,7 +1086,173 @@ GET  api5/go-salas/banner-by-sala
 
 ---
 
+# PARTE VI — MÁQUINAS › Historial de contadores `/tgm/meter-snap` (✅ verificado en vivo)
+
+> Sesión iniciada por el usuario en `app.wargos.cloud`, sala **El Palacio** (`x-sala-id: 123`),
+> 2026-10-24. Solo lectura: se filtraron **5 máquinas al azar** (una por modelo distinto) y un
+> **rango de 5 días**. **No se pulsó "Analizar" ni ninguna acción de fila**, porque todas escriben
+> (§VI.6). Los endpoints se capturaron interceptando las llamadas XHR en el navegador. La lógica
+> de la pantalla se leyó del bundle `static/js/693.ded3fcda.chunk.js` (componente del historial) y
+> las URLs base de `main.4a76ac0e.js`.
+
+## VI.1 Cómo obtienen los datos
+
+```
+Máquina (protocolo SAS) ── SMIB "Pangolin" (blueSn) ──► xtgmconex (api5)
+   │  "foto" (snap) de TODOS los contadores acumulados:
+   │   · cada hora en punto (createdAt = hh:00 + 4–11 s)                 ✅
+   │   · y por evento: Stacker (11), Puerta abierta (17),
+   │     Puerta cerrada (18), Manual (20), Otro                          ✅
+   ▼
+meter_snap: una fila por foto = acumulados + prev* + inc* + validaciones,
+            calculados en el servidor al grabar                          ✅
+   ▼
+GET /xtgmconex/meter-snap/by-dates?ini&fin&confId ──► el frontend solo pinta (gráfico + tabla)
+```
+
+- **El navegador no calcula nada.** Cada fila trae el acumulado (`ci`), el valor de la foto
+  anterior (`prevCi`) y el incremento (`incCi = ci − prevCi`, comprobado en todas las filas).
+- **Los contadores vienen en créditos.** Para pasarlos a soles se multiplica por `machine.den`
+  (0.01 en las 5 máquinas). Comprobado con el billetero de la 129767:
+  1 344×10 + 2 166×20 + 1 982×50 + 2 921×100 = S/ 447 960 = `bi` 44 796 000 × 0.01.
+- 🔷 Que el SMIB sea el origen se infiere de `blueSn` (el mismo bundle lo llama "Pangolin (SMIB)"
+  en el modal "Cambiar dispositivo") y del flag `connected`. El transporte SMIB→nube no se ve
+  desde el navegador.
+
+## VI.2 Endpoints de la pantalla (✅ capturados)
+
+Cabeceras en todas: `Authorization: Bearer <token OAuth>` · `x-sala-id: 123` · `Accept:
+application/json`. `x-sala-id` es una cabecera global de axios: se fija al elegir sala y se
+guarda en `localStorage.salaId`.
+
+| # | Cuándo | Llamada | Respuesta |
+|---|---|---|---|
+| 1 | Arranque de la app (toda pantalla) | `GET api5/xuser/users/me?product=gaming` · `GET api5/xcaja/config-caja` · `GET api5/go-salas/salas-config` · `GET api5/go-salas/banner-by-sala` | usuario y roles, config de caja y de sala |
+| 2 | Al elegir sala (solo si el rol tiene `restrictIp`) | `GET api5/xtgmconex/access` (con `x-sala-id`) | `{access: bool}` |
+| 3 | Al montar el selector de máquina | `GET api5/xtgmconex/machines/combo` | array de 115 máquinas `{id, confId, machine, machineLink, serverLink, slotGroup, manufacturerId}` · 15 KB · ~180 ms |
+| 4 | Buscar, flechas de día, Hoy / Día / Personalizado | `GET api5/xtgmconex/meter-snap/by-dates?ini=YYYY-MM-DD&fin=YYYY-MM-DD&confId=<confId>` | `{machine: {…}, data: [foto…]}` |
+
+Detalles de la llamada 4:
+- El selector usa `value = confId` y `label = machine`, y **no siempre coinciden**. La máquina
+  "147346" tiene `confId=47346`, y su consulta volvió con `data: []` ("No hay datos").
+- **Cada búsqueda dispara la misma petición dos veces**: el `onClick` de Buscar llama a
+  `fetchData` y un `useEffect` sobre los parámetros vuelve a llamarla. Pasó con las 5 máquinas.
+- **No hay paginación en el servidor.** 1 día ≈ 8–9 filas, ~8 KB, ~350 ms; **5 días = 107 filas,
+  104 KB, 2,7 s** para una sola máquina. La tabla pagina en el cliente (200 filas por página).
+- **Ventana de tiempo observada:** empieza a las **04:00 del día `ini`**. Un día solo = de 04:00 a
+  la hora actual; el rango 20→24 trajo el día 20 desde las 04:00 y el 24 desde las 00:00. El
+  límite final no se pudo comprobar porque `fin` era hoy.
+
+## VI.3 Las 5 máquinas filtradas (24-10-2026)
+
+| confId | Etiqueta | Modelo · fabricante | Juego | Tipo | serverLink / machineLink / SMIB | Filas | Lo observado |
+|---|---|---|---|---|---|---|---|
+| 10593 | 10593 | TANGRA TOUCH · CASINO TEC | GAMOPOLIS 77 | 1 | no / no / — | 8 | billete de S/ 20 a las 11:00; `diffTo −2000` |
+| 113334 | 113334 | IGT CRYSTAL DUAL SLANT · IGT | MULTIJUEGO | 1 | sí / no / — | 8 | `diffTi −1` y `diffTo −1` a las 09:00 |
+| 47346 | **147346** | CASINO TEC - NEXT · CASINO TEC | DIAMOND KING III | 1 | no / no / — | **0** | sin fotos (etiqueta ≠ confId, `zoneId` nulo) |
+| 54836 | 54836 | GOLD CLUB FUTURA PRO · GOLD CLUB | RULETA | **2** | no / no / — | 8 | sin movimiento en el día |
+| 129767 | 129767 | MERKUR STC 230 · MERKUR | MULTIJUEGO | 1 | sí / sí / **presente** | **9** | foto extra **06:09 "Stacker"**; única con `connected=true` y con billetes por denominación |
+
+Referencia previa: la 1022 (AGI FV 880 CF2) dio 8 filas y Coin In +2 320 a las 09:00. No hay
+datos personales: solo contadores de máquina.
+
+## VI.4 Diccionario de la foto de contadores (`data[]`)
+
+| Grupo | Campos | Significado |
+|---|---|---|
+| Identidad | `id`, `confId`, `salaId`, `fechaHora`, `createdAt` | `id` correlativo global (~212 millones); hora nominal de la foto y hora real de grabación |
+| Jornada | `realFecha`, `closeDay` | **Día contable**: cambia a las **08:00** (lo de 00:00–07:59 cuenta para el día anterior). `closeDay=true` marca la **foto de cierre** del día (§VI.5) |
+| Origen | `sourceId`, `manual`, `localSnap` | 0 = foto horaria ("--"), 11 Stacker, 17 Puerta abierta, 18 Puerta cerrada, 20 Manual; cualquier otro = "Otro" |
+| Contadores SAS (acumulados, en créditos) | `ci` Coin In · `co` Coin Out · `jp` Jackpot · `cc` Cancel Credit · `bi` Billetes · `ticketIn` · `ticketOut` · `hp` Handpay · `m30` "Pagos ext." · `gp` Jugadas · `cr` créditos en pantalla · `tiq`/`toq` cantidad de tickets in/out · `tci`/`tco` · `m23 m24 m29 m47 m51` (otros códigos SAS, en 0) | las columnas de la tabla |
+| Billetero | `b10 b20 b50 b100 b200` | **cantidad de billetes** por denominación (acumulada) |
+| Foto anterior | `prevCi prevCo prevJp prevCc prevBi prevTi prevTo` | valores de la foto previa |
+| Incrementos | `incCi incCo incJp incCc incBi incTi incTo incGp incTiq incToq incPeb` | `X − prevX`; la tabla los muestra en una columna chica junto a cada contador (verde > 0, rojo < 0) |
+| Validación | `consistent`, `consistentDiff` | ecuación de créditos (§VI.5) |
+| Conciliación TITO | `diffTi`, `diffTo`, `tir tor tirq torq`, `ticketInPhysical`, `ticketOutPhysical`, `quantityTiP/ToP` | 🔷 contador SAS de tickets vs. tickets registrados. En las 5 máquinas `tir`/`tor` vinieron en 0, así que `diffTi = −incTi` y `diffTo = −incTo` |
+| Estado | `connected`, `enabled`, `wenabled`, `wbreak`, `wbreakType` | `wenabled=false` = foto deshabilitada a mano (sale del gráfico y se ve atenuada); `wbreak` 🔷 = quiebre de contadores (fila roja) |
+
+Objeto `machine`: `id`, `confId`, `machine` (etiqueta), `numReg` (registro MINCETUR, columna
+"RMT"), `den`, `gameName`, `groupId`/`groupName` (modelo), `manufacturerName`,
+`manufacturerLogoUrl` (ruta en `cdn.wargos.cloud`), `machineTypeId` (1 en tragamonedas, 2 en la
+ruleta), `serverLink`, `machineLink`, `blueSn` (serie del SMIB Pangolin), `zoneId`.
+
+## VI.5 Reglas que se deducen de los datos (✅ comprobadas en las 107 filas de la 129767)
+
+1. **Ecuación de créditos.** `cr` debe cuadrar con `prevCr + incBi + incTi + incCo + incJp −
+   incCi − incTo − incCc`. `consistentDiff` es el descuadre acumulado (con signo contrario) desde
+   la última foto que cuadró, y `consistent=false` mientras no vuelva a 0. Hubo 5 descuadres
+   chicos (20–220 créditos) y todos se cerraron solos en la foto siguiente (🔷 créditos en
+   tránsito: la foto cae a mitad de una jugada).
+2. **La validación detectó un error real.** `consistentDiff` marcó **−100 000 000 durante 29 h**
+   (del 20-10 05:00 al 21-10 09:00). Se resolvió a las 10:00 del 21-10, cuando `ticketOut` saltó
+   exactamente +100 000 000 (de 7 194 284 a 107 194 284): era una lectura truncada a 8 dígitos
+   que se corrigió. `wbreak` siguió en `false` y `diffTo` registró −100 000 000 en esa hora.
+3. **Foto de cierre del día.** Por defecto es la de las **08:00** ("Contadores por hora" también
+   abre por defecto en `fechaHora=…T08:00`). Si hubo un retiro de **stacker** antes (06:07–06:10
+   los días 22, 23 y 24), esa foto pasa a ser el cierre. El operador puede forzar otra con la
+   acción "Cierre".
+4. **Fotos por evento además de las horarias.** Los días 22, 23 y 24 tuvieron 25 filas cada uno
+   (24 horarias + 1 Stacker).
+5. **Incremento negativo** (`incCi < 0` sin `wbreak`) = contadores reseteados. Solo entonces la
+   UI ofrece la acción **"Cereo"** para registrar la puesta a cero.
+6. **Colores de fila:** rojo = `wbreak`, amarillo = `closeDay`, atenuado = `!wenabled`. El punto de
+   la segunda columna indica `connected`.
+
+## VI.6 Acciones que escriben (⚠️ leídas del código, NO ejecutadas)
+
+| Botón o menú ⚙ de la fila | Llamada | Efecto (texto de la UI) |
+|---|---|---|
+| **Analizar** (cabecera) | `GET /xtgmconex/meter-snap/analize?ini&fin` | "Produccion recalculada". **Es un GET con efecto secundario y no lleva `confId`**: recalcula la producción de toda la sala en el rango |
+| Clonar | `POST /xtgmconex/meter-snap/{id}/clone` | "¿Desea clonar esta foto de contadores?" |
+| Cierre | `POST /xtgmconex/meter-snap/{id}/use-as-close` | "¿Desea este contador como el del cierre?" |
+| Cereo (solo si `incCi<0 && !wbreak`) | `POST /xtgmconex/meter-snap/{id}/add-cereo` | "Cereo agregado" |
+| Deshabilitar / Habilitar | `POST /xtgmconex/meter-snap/{id}/disable` · `/enable` | "Registro deshabilitado/habilitado correctamente" |
+
+El mismo objeto de servicios del bundle declara otras llamadas que esta pantalla no dispara:
+`GET /deltas/sync`, `/deltas/recalc`, `/deltas/recalc/v2`, `/machines/sync`,
+`/machines/{id}/prev`, `/machines/{id}/next` y `/meter-history/sync-hour-cou` (así, truncado,
+en el bundle).
+
+Pantalla hermana **Contadores por hora** (`/tgm/accountants`): `GET
+/xtgmconex/meter-snap/all-machines?fechaHora=YYYY-MM-DDT08:00&closure=false` (una foto por máquina
+a esa hora; el check "Cierre el día" (sic) envía `closure=true`) y exporta con
+`.../all-machines/report.xlsx`. Su columna "Origen" usa el mismo mapa de `sourceId`.
+
+## VI.7 URLs base del panel (✅ constante de `main.4a76ac0e.js`)
+
+- **`api4.wargos.cloud`** (BASE): `xpointcore`, `xrgslink`, `xcustomergroup`, `xemulator`.
+- **`api5.wargos.cloud`**: `xtgmconex`, `xmachinehistory`, `xsorteos`, `xcustomerapp`, `xnotif`,
+  `xprint`, `xfile`, `xuser`, `xcaja`, `xcanje`, `xblacklist`, `xsearch`, `xactivityfeed`,
+  `xfoodorder`, `go-salas`, `xstatistic`, `xticket`, `xtables`, `xperson`, `xbilling`, `xbingo`,
+  `xsupport`, `xautomation`, `xlogistics`.
+- Además `accounts.wargos.cloud` (OAuth) y `cdn.wargos.cloud`.
+
+## VI.8 Implicaciones para el Sistema de Cupones
+
+1. **La foto de contadores es la fuente de verdad** de la producción y, por tanto, de los cupones
+   por apuesta: el cupón se calcula sobre `incCi` (lo apostado) por máquina y jornada. Conviene
+   una tabla `meter_snapshot` de solo inserción, con acumulados y `prev`/`inc` calculados al
+   grabar.
+2. **Jornada contable configurable por sala** (Wargos usa 08:00) y foto de cierre explícita
+   (`close_day`), con la regla "retiro de stacker antes del corte = cierre".
+3. **Validar la ecuación de créditos al grabar** y guardar el descuadre. El caso del ticketOut
+   truncado (§VI.5.2) muestra que detecta lecturas malas; un cupón no debería emitirse sobre
+   fotos que no cuadran.
+4. **Correcciones como operaciones auditadas, no como ediciones** (clonar, marcar cierre, cereo,
+   deshabilitar), igual que Wargos, pero siempre con **POST** e idempotencia, nunca con un GET que
+   recalcula.
+5. **No repetir los dos defectos vistos:** la doble petición por búsqueda y los rangos sin
+   paginar (5 días ya pesan 104 KB y tardan 2,7 s por máquina). Para rangos largos conviene servir
+   agregados por hora o por día desde el servidor.
+6. **Identificador estable de máquina:** separar `confId` (configuración) de la etiqueta visible.
+   El caso 147346/47346 muestra que, si no coinciden, la vista se queda sin fotos.
+
+---
+
 ### Fuentes
+- **Recorrido autenticado (2026-10-24)** de `/tgm/meter-snap` en El Palacio: 5 máquinas al azar
+  y un rango de 5 días, con las llamadas XHR interceptadas en el navegador y lectura de los
+  bundles `main.4a76ac0e.js` y `693.ded3fcda.chunk.js`. Solo lectura; no se ejecutaron acciones.
 - **Recorrido autenticado (2026-08-16)** del panel `app.wargos.cloud` (sesión iniciada por el
   usuario; solo lectura; sin extraer datos personales).
 - **Inspección directa (2026-08-16)** de: página de login `accounts.wargos.cloud`, bundles JS
